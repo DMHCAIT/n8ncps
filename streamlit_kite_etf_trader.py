@@ -58,7 +58,10 @@ from typing import Optional, Dict, Any, List
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-import plotly.graph_objs as go
+try:
+    import plotly.graph_objs as go
+except ImportError:
+    go = None
 
 # Optional imports; catch-friendly if kiteconnect not installed
 try:
