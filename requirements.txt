@@ -1,0 +1,6 @@
+streamlit
+kiteconnect
+pandas
+python-dotenv
+requests
+schedule

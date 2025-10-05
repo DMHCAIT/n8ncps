@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TURTEL Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            text-align: center;
+            margin-top: 50px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+        }
+        #token-display {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>TURTEL Dashboard</h1>
+        <button onclick="generateToken()">Generate Access Token</button>
+        <div id="token-display"></div>
+    </div>
+
+    <script>
+        function generateToken() {
+            fetch('/generate-token')
+                .then(response => response.json())
+                .then(data => {
+                    const tokenDisplay = document.getElementById('token-display');
+                    tokenDisplay.style.display = 'block';
+                    tokenDisplay.innerHTML = `<p>Your access token:</p><strong>${data.token}</strong>`;
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Error generating token');
+                });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  etf-trader:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    environment:
+      - DB_FILE=/app/data/trades.db
