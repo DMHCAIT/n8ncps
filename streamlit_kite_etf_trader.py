@@ -152,12 +152,21 @@ DB = init_db()
 DB_LOCK = threading.Lock()
 
 
+def safe_json_dumps(obj):
+    """Safely serialize objects to JSON, handling datetime objects"""
+    def json_serializer(obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+    
+    return json.dumps(obj, default=json_serializer)
+
 def save_trade(symbol: str, qty: int, side: str, price: float, order_id: Optional[str], dry_run: bool, extra: Optional[Dict] = None):
     with DB_LOCK:
         cur = DB.cursor()
         cur.execute(
             "INSERT INTO trades (symbol, qty, side, price, timestamp, order_id, dry_run, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (symbol, qty, side, price, datetime.utcnow().isoformat(), order_id or "", 1 if dry_run else 0, json.dumps(extra or {})),
+            (symbol, qty, side, price, datetime.now(timezone.utc).isoformat(), order_id or "", 1 if dry_run else 0, safe_json_dumps(extra or {})),
         )
         DB.commit()
 
@@ -680,7 +689,12 @@ def check_and_execute_buy(symbol: str, qty: int, dry_run: bool):
         print(f"   Current LTP: ₹{ltp:.2f}")
         print(f"   Gap: {gap_percent:.2f}%")
         
-        # 🔥 DYNAMIC QUANTITY CALCULATION - Use real capital allocation
+        # � IMMEDIATE PROTECTION: Add to bought_today BEFORE any order processing
+        # This prevents multiple concurrent orders for the same symbol
+        MONITOR_STATE["bought_today"].add(symbol)
+        print(f"🔒 Added {symbol} to bought_today protection list")
+        
+        # �🔥 DYNAMIC QUANTITY CALCULATION - Use real capital allocation
         dynamic_qty = calculate_dynamic_trade_quantity(symbol, ltp)
         if dynamic_qty <= 0:
             print(f"🛑 Skipping {symbol}: Dynamic quantity calculation returned 0")
@@ -693,15 +707,14 @@ def check_and_execute_buy(symbol: str, qty: int, dry_run: bool):
         if dry_run:
             # Simulate executed price as current LTP
             executed_price = ltp
-            order_id = "DRYRUN-" + datetime.utcnow().isoformat()
+            order_id = "DRYRUN-" + datetime.now(timezone.utc).isoformat()
             save_trade(symbol, qty, "BUY", executed_price, order_id, True, {
                 "note": "dry_run simulated buy",
                 "gap_percent": gap_percent,
                 "prev_close": prev_close
             })
             target = executed_price * (1 + SELL_TARGET_PERCENT / 100.0)
-            upsert_position(symbol, qty, executed_price, datetime.utcnow().isoformat(), target, "BOUGHT")
-            MONITOR_STATE["bought_today"].add(symbol)
+            upsert_position(symbol, qty, executed_price, datetime.now(timezone.utc).isoformat(), target, "BOUGHT")
             notify(f"[DRY_RUN] 📊 Bought {qty} {symbol} at ₹{executed_price:.2f} (Gap: {gap_percent:.2f}%); Target: ₹{target:.2f}")
         else:
             # LIVE TRADING - Enhanced execution
@@ -738,8 +751,7 @@ def check_and_execute_buy(symbol: str, qty: int, dry_run: bool):
                     
                     # Calculate target and update position
                     target = executed_price * (1 + SELL_TARGET_PERCENT / 100.0)
-                    upsert_position(symbol, filled_qty, executed_price, datetime.utcnow().isoformat(), target, "BOUGHT")
-                    MONITOR_STATE["bought_today"].add(symbol)
+                    upsert_position(symbol, filled_qty, executed_price, datetime.now(timezone.utc).isoformat(), target, "BOUGHT")
                     
                     notify(f"🎉 [LIVE] BUY EXECUTED! {filled_qty} x {symbol} @ ₹{executed_price:.2f} | Gap: {gap_percent:.2f}% | Target: ₹{target:.2f} | Order: {order_id}")
                     
@@ -805,6 +817,20 @@ def monitor_loop():
             print(f"   Mode: {'DRY_RUN' if MONITOR_STATE['dry_run'] else 'LIVE TRADING'}")
             print(f"   Bought today: {list(MONITOR_STATE['bought_today'])}")
         
+        # 🧹 Cleanup: Remove closed positions from bought_today protection
+        if loop_count % 120 == 1:  # Every 10 minutes
+            closed_symbols = []
+            with DB_LOCK:
+                cur = DB.cursor()
+                for symbol in list(MONITOR_STATE["bought_today"]):
+                    cur.execute("SELECT status FROM positions WHERE symbol = ? AND status IN ('TARGET_HIT', 'SOLD')", (symbol,))
+                    if cur.fetchone():
+                        closed_symbols.append(symbol)
+            
+            for symbol in closed_symbols:
+                MONITOR_STATE["bought_today"].remove(symbol)
+                print(f"🧹 Cleanup: Removed {symbol} from bought_today (position closed)")
+        
         symbols = MONITOR_STATE["symbols"]
         
         for symbol in symbols:
@@ -833,7 +859,12 @@ def monitor_loop():
                     if ltp >= target_price and status not in ["TARGET_HIT"]:
                         profit = (target_price - avg_buy_price) * qty
                         notify(f"🎯 TARGET HIT! {symbol}: LTP ₹{ltp:.2f} >= Target ₹{target_price:.2f} | Profit: ₹{profit:.2f} (+{pnl_percent:.2f}%)")
-                        upsert_position(symbol, qty, avg_buy_price, datetime.utcnow().isoformat(), target_price, "TARGET_HIT")
+                        upsert_position(symbol, qty, avg_buy_price, datetime.now(timezone.utc).isoformat(), target_price, "TARGET_HIT")
+                        
+                        # 🔓 Remove from bought_today so it can be bought again if conditions are met
+                        if symbol in MONITOR_STATE["bought_today"]:
+                            MONITOR_STATE["bought_today"].remove(symbol)
+                            print(f"🔓 Removed {symbol} from bought_today protection - available for new trades")
                     
                     # Check stop loss alert (but don't auto-sell)
                     loss_threshold = avg_buy_price * (1 - LOSS_ALERT_PERCENT / 100.0)
@@ -841,7 +872,7 @@ def monitor_loop():
                         loss = (ltp - avg_buy_price) * qty
                         notify(f"🚨 STOP LOSS ALERT! {symbol}: LTP ₹{ltp:.2f} <= Threshold ₹{loss_threshold:.2f} | Loss: ₹{loss:.2f} ({pnl_percent:.2f}%)")
                         notify(f"🚨 Consider selling {qty} shares of {symbol} manually!")
-                        upsert_position(symbol, qty, avg_buy_price, datetime.utcnow().isoformat(), target_price, "ALERTED")
+                        upsert_position(symbol, qty, avg_buy_price, datetime.now(timezone.utc).isoformat(), target_price, "ALERTED")
                     
                     # Log position status periodically
                     if loop_count % 120 == 1:  # Every 10 minutes
@@ -1222,7 +1253,7 @@ else:
                                 
                                 # Auto-create position entry
                                 target = avg_price * (1 + SELL_TARGET_PERCENT / 100.0)
-                                upsert_position(symbol_manual, filled_qty, avg_price, datetime.utcnow().isoformat(), target, "BOUGHT")
+                                upsert_position(symbol_manual, filled_qty, avg_price, datetime.now(timezone.utc).isoformat(), target, "BOUGHT")
                                 
                                 # Mark as bought today to prevent multiple orders
                                 MONITOR_STATE["bought_today"].add(symbol_manual)
