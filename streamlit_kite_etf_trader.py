@@ -363,14 +363,6 @@ def update_capital_allocation():
     
     return True
 
-if KITE_API_KEY:
-    KITE = KiteWrapper(KITE_API_KEY, KITE_ACCESS_TOKEN)
-    
-    # Initialize capital allocation with real account balance
-    if KITE and KITE.kite:
-        print("🏦 Initializing capital allocation with real account balance...")
-        update_capital_allocation()
-
 # ---- Notifications ----
 
 import requests
@@ -410,6 +402,15 @@ MONITOR_STATE = {
     "allocated_capital": 0.0,       # Currently used in open trades
     "last_balance_update": None,    # When balance was last fetched
 }
+
+# Initialize Kite and capital allocation
+if KITE_API_KEY:
+    KITE = KiteWrapper(KITE_API_KEY, KITE_ACCESS_TOKEN)
+    
+    # Initialize capital allocation with real account balance
+    if KITE and KITE.kite:
+        print("🏦 Initializing capital allocation with real account balance...")
+        update_capital_allocation()
 
 
 def fetch_prev_close(symbol: str) -> Optional[float]:
