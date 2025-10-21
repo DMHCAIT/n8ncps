@@ -752,15 +752,40 @@ class KiteWrapper:
 
 # Instantiate Kite wrapper (may be None if not configured)
 KITE = None
+
+def get_kite_connection():
+    """Get or create Kite connection for current session"""
+    # Use session state to maintain connection across different access methods
+    if "kite_connection" not in st.session_state:
+        st.session_state.kite_connection = None
+    
+    # If no connection in session state, try to create one
+    if st.session_state.kite_connection is None and KITE_API_KEY and KITE_ACCESS_TOKEN:
+        try:
+            st.session_state.kite_connection = KiteWrapper(KITE_API_KEY, KITE_ACCESS_TOKEN)
+            print(f"✅ Created new Kite connection for session")
+        except Exception as e:
+            print(f"❌ Failed to create Kite connection: {e}")
+            st.session_state.kite_connection = None
+    
+    return st.session_state.kite_connection
+
+def refresh_kite_connection():
+    """Force refresh of Kite connection"""
+    if "kite_connection" in st.session_state:
+        del st.session_state.kite_connection
+    return get_kite_connection()
+
 # Capital management functions
 def fetch_real_account_balance():
     """Fetch real account balance from Kite"""
     try:
-        if not KITE or not KITE.kite:
+        kite_conn = get_kite_connection()
+        if not kite_conn or not kite_conn.kite:
             print("❌ Kite connection not available")
             return 0.0
-            
-        margins = KITE.kite.margins()
+        
+        margins = kite_conn.kite.margins()
         equity_margins = margins.get('equity', {})
         available_cash = equity_margins.get('available', {}).get('cash', 0.0)
         
@@ -837,12 +862,14 @@ MONITOR_STATE = {
 
 # Initialize Kite and capital allocation
 if KITE_API_KEY:
-    KITE = KiteWrapper(KITE_API_KEY, KITE_ACCESS_TOKEN)
+    # Set global KITE for backward compatibility
+    KITE = KiteWrapper(KITE_API_KEY, KITE_ACCESS_TOKEN) if KITE_ACCESS_TOKEN else None
     
     # Initialize watchlist from environment or instruments
-    if KITE and KITE.kite:
+    kite_conn = get_kite_connection()
+    if kite_conn and kite_conn.kite:
         # Update watchlist with ETFs from instruments API
-        MONITOR_STATE["symbols"] = get_watchlist_from_env_or_instruments(KITE.kite)
+        MONITOR_STATE["symbols"] = get_watchlist_from_env_or_instruments(kite_conn.kite)
     else:
         # Fallback to environment or default
         MONITOR_STATE["symbols"] = get_watchlist_from_env_or_instruments(None)
@@ -932,12 +959,13 @@ def check_token_validity():
     if not KITE_ACCESS_TOKEN:
         return {"valid": False, "error": "No access token found", "status": "missing"}
     
-    if not KITE or not KITE.kite:
+    kite_conn = get_kite_connection()
+    if not kite_conn or not kite_conn.kite:
         return {"valid": False, "error": "Kite client not initialized", "status": "not_initialized"}
     
     try:
         # Try to fetch profile to test token validity
-        profile = KITE.kite.profile()
+        profile = kite_conn.kite.profile()
         return {
             "valid": True, 
             "user_name": profile.get('user_name', 'Unknown'),
@@ -1611,6 +1639,30 @@ def monitor_gtt_executions():
 st.set_page_config(page_title="ETF Gap-Down Trader", layout="wide")
 st.title("ETF Gap-Down Trader — Streamlit + Zerodha (Prototype)")
 
+# 🔗 Connection Status Header
+col1, col2, col3 = st.columns([3, 1, 1])
+with col1:
+    # Show real-time connection status
+    kite_conn = get_kite_connection()
+    token_status = check_token_validity()
+    
+    if token_status["valid"]:
+        st.success(f"✅ Connected to Zerodha as: **{token_status.get('user_name', 'Unknown')}**")
+    else:
+        st.error(f"❌ Not Connected: {token_status.get('error', 'Unknown error')}")
+
+with col2:
+    if st.button("🔄 Refresh Connection"):
+        refresh_kite_connection()
+        st.rerun()
+
+with col3:
+    # Show session indicator 
+    access_method = "Cloud" if "localhost" not in st._get_option("server.address", "localhost") else "Local"
+    st.info(f"📡 {access_method} Access")
+
+st.divider()
+
 # Enhanced Access Token Generation Section
 st.markdown("---")
 
@@ -1869,14 +1921,72 @@ with st.sidebar:
             </script>
             """, unsafe_allow_html=True)
     
-    # Quick stats if connected
-    if token_status["color"] == "success" and KITE and KITE.kite:
-        try:
-            margins = KITE.kite.margins()
-            available_cash = margins.get('equity', {}).get('available', {}).get('cash', 0)
-            st.metric("💰 Available Cash", f"₹{available_cash:,.2f}")
-        except:
-            pass
+    # 💰 Account Balance & Quick Stats
+    balance_col1, balance_col2, balance_col3 = st.columns(3)
+    
+    with balance_col1:
+        token_status = check_token_validity()
+        if token_status["valid"]:
+            kite_conn = get_kite_connection()
+            if kite_conn and kite_conn.kite:
+                try:
+                    margins = kite_conn.kite.margins()
+                    available_cash = margins.get('equity', {}).get('available', {}).get('cash', 0)
+                    st.metric("💰 Available Cash", f"₹{available_cash:,.2f}")
+                except Exception as e:
+                    st.error(f"❌ Balance Error: {str(e)[:50]}...")
+            else:
+                st.warning("⚠️ Connection issue - try refreshing")
+                
+    with balance_col2:
+        if st.button("🔄 Refresh Balance", type="secondary"):
+            kite_conn = get_kite_connection()
+            if kite_conn and kite_conn.kite:
+                try:
+                    with st.spinner("Fetching account data..."):
+                        # First test the connection
+                        profile = kite_conn.kite.profile()
+                        st.success(f"✅ Connected as: {profile.get('user_name', 'Unknown')}")
+                        
+                        # Then fetch margins
+                        margins = kite_conn.kite.margins()
+                        equity_data = margins.get('equity', {})
+                        available_data = equity_data.get('available', {})
+                        cash = available_data.get('cash', 0)
+                        net = equity_data.get('net', 0)
+                        
+                        st.success(f"💰 Cash: ₹{cash:,.2f}")
+                        st.info(f"🏦 Net: ₹{net:,.2f}")
+                        
+                        # Update global state
+                        MONITOR_STATE["total_capital"] = float(cash)
+                        MONITOR_STATE["last_balance_update"] = datetime.now().isoformat()
+                        
+                        # Show additional details
+                        if cash == 0:
+                            st.warning("⚠️ Available cash is ₹0. Check if funds are available for trading.")
+                        
+                except Exception as e:
+                    st.error(f"❌ API Error: {e}")
+                    if "Incorrect" in str(e) and "access_token" in str(e):
+                        st.error("🔑 **Token Expired!** Generate a new access token using the form above.")
+                        # Force refresh connection on token error
+                        refresh_kite_connection()
+                    elif "api_key" in str(e):
+                        st.error("🔐 **Invalid API Key!** Check your API credentials.")
+                    else:
+                        st.error(f"📡 **Connection Issue:** {e}")
+            else:
+                st.error("❌ Kite API not connected - Check token status above")
+                # Try to refresh connection
+                kite_conn = refresh_kite_connection()
+                if kite_conn:
+                    st.success("🔄 Connection refreshed! Try again.")
+                
+    with balance_col3:
+        if MONITOR_STATE.get("last_balance_update"):
+            last_update = datetime.fromisoformat(MONITOR_STATE["last_balance_update"])
+            st.caption(f"Last Updated: {last_update.strftime('%H:%M:%S')}")
     
     st.markdown("---")
     
@@ -1889,10 +1999,29 @@ with st.sidebar:
     # 💰 Dynamic Capital Allocation Settings
     st.subheader("💰 Capital Allocation")
     
+    # Show current connection status for balance fetching
+    kite_conn = get_kite_connection()
+    if not kite_conn or not kite_conn.kite:
+        st.error("❌ Kite API not connected - Cannot fetch real balance")
+        st.info("💡 Generate and validate your access token above to see account balance")
+        
+        # Add connection refresh button
+        if st.button("🔄 Refresh Connection", type="secondary"):
+            refresh_kite_connection()
+            st.rerun()
+    
     # Update capital allocation button
     if st.button("🔄 Refresh Real Balance", type="secondary"):
-        update_capital_allocation()
-        st.rerun()
+        kite_conn = get_kite_connection()
+        if kite_conn and kite_conn.kite:
+            with st.spinner("Fetching account balance..."):
+                update_capital_allocation()
+                st.rerun()
+        else:
+            st.error("❌ Please connect to Kite API first")
+            # Try to refresh connection
+            refresh_kite_connection()
+            st.rerun()
     
     # Display current capital information
     if MONITOR_STATE["total_capital"] > 0:
@@ -1911,6 +2040,36 @@ with st.sidebar:
         st.metric("Available for Trading", f"₹{available_deployment:,.2f}")
     else:
         st.warning("⚠️ Real balance not loaded. Click 'Refresh Real Balance'")
+        
+        # Debug section for troubleshooting
+        with st.expander("🔧 Debug Balance Issues"):
+            st.write("**Troubleshooting Steps:**")
+            st.write("1. ✅ Ensure access token is valid")
+            st.write("2. ✅ Check Kite API connection status")
+            st.write("3. ✅ Verify trading account has sufficient balance")
+            
+            if st.button("🔬 Test API Connection", key="debug_api"):
+                kite_conn = get_kite_connection()
+                if kite_conn and kite_conn.kite:
+                    try:
+                        # Test basic API call
+                        profile = kite_conn.kite.profile()
+                        st.success(f"✅ API Connected - User: {profile.get('user_name', 'Unknown')}")
+                        
+                        # Test margins call
+                        margins = kite_conn.kite.margins()
+                        st.json(margins)  # Show raw response
+                        
+                    except Exception as e:
+                        st.error(f"❌ API Test Failed: {e}")
+                        # Try refreshing connection on error
+                        refresh_kite_connection()
+                else:
+                    st.error("❌ KITE object not initialized")
+                    # Try to create connection
+                    kite_conn = refresh_kite_connection()
+                    if kite_conn:
+                        st.success("🔄 Connection created! Test again.")
     
     # Capital allocation parameters (advanced settings)
     with st.expander("� Advanced Capital Settings"):
