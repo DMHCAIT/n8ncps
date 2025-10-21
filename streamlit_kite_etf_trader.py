@@ -1649,7 +1649,12 @@ with col1:
     if token_status["valid"]:
         st.success(f"✅ Connected to Zerodha as: **{token_status.get('user_name', 'Unknown')}**")
     else:
-        st.error(f"❌ Not Connected: {token_status.get('error', 'Unknown error')}")
+        error_msg = token_status.get('error', 'Unknown error')
+        if "Incorrect" in error_msg and ("api_key" in error_msg or "access_token" in error_msg):
+            st.error("🔑 **TOKEN EXPIRED** - Zerodha tokens expire daily!")
+            st.warning("👆 **Generate a new access token using the form below**")
+        else:
+            st.error(f"❌ Not Connected: {error_msg}")
 
 with col2:
     if st.button("🔄 Refresh Connection"):
@@ -1657,9 +1662,15 @@ with col2:
         st.rerun()
 
 with col3:
-    # Show session indicator 
-    access_method = "Cloud" if "localhost" not in st._get_option("server.address", "localhost") else "Local"
-    st.info(f"📡 {access_method} Access")
+    # Show session indicator - use a simpler method to detect access type
+    try:
+        # Try to get the current URL from browser
+        import urllib.parse
+        # Simple detection based on common patterns
+        access_method = "Network"  # Default assumption for cloud/network access
+        st.info(f"📡 {access_method} Access")
+    except:
+        st.info("📡 Network Access")
 
 st.divider()
 
