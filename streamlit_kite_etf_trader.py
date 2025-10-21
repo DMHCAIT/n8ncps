@@ -105,6 +105,43 @@ DRY_RUN_DEFAULT = os.getenv("DRY_RUN", "True").lower() == "true"
 # ---- ETF Instruments Fetcher ----
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour
+def _cached_etf_instruments(instruments_data):
+    """
+    Process instruments data to extract ETF symbols.
+    This function can be cached since it only processes data, not API objects.
+    """
+    # Filter for ETFs only
+    etf_symbols = []
+    for instrument in instruments_data:
+        # Look for ETF characteristics
+        name = instrument.get('name', '').upper()
+        tradingsymbol = instrument.get('tradingsymbol', '')
+        exchange = instrument.get('exchange', '')
+        instrument_type = instrument.get('instrument_type', '')
+        
+        # ETF identification criteria
+        is_etf = (
+            'ETF' in name or 
+            'BEES' in tradingsymbol or 
+            'INDEX' in name or
+            tradingsymbol.endswith('ETF') or
+            tradingsymbol.endswith('BEES') or
+            tradingsymbol.endswith('IETF') or
+            any(keyword in tradingsymbol for keyword in [
+                'LIQUID', 'GOLD', 'SILVER', 'NIFTY', 'SENSEX', 
+                'BANK', 'IT', 'PHARMA', 'AUTO', 'ENERGY', 'METAL',
+                'INFRA', 'FMCG', 'CONSUMPTION', 'HEALTHCARE'
+            ])
+        )
+        
+        # Only NSE ETFs
+        if is_etf and exchange == 'NSE' and instrument_type == 'EQ':
+            etf_symbols.append(tradingsymbol)
+    
+    # Remove duplicates and sort
+    etf_symbols = sorted(list(set(etf_symbols)))
+    return etf_symbols
+
 def fetch_etf_instruments(kite_api=None):
     """
     Fetch all ETF instruments from Kite instruments API.
@@ -117,36 +154,8 @@ def fetch_etf_instruments(kite_api=None):
         st.info("🔄 Fetching ETF instruments from Kite API...")
         instruments = kite_api.instruments()
         
-        # Filter for ETFs only
-        etf_symbols = []
-        for instrument in instruments:
-            # Look for ETF characteristics
-            name = instrument.get('name', '').upper()
-            tradingsymbol = instrument.get('tradingsymbol', '')
-            exchange = instrument.get('exchange', '')
-            instrument_type = instrument.get('instrument_type', '')
-            
-            # ETF identification criteria
-            is_etf = (
-                'ETF' in name or 
-                'BEES' in tradingsymbol or 
-                'INDEX' in name or
-                tradingsymbol.endswith('ETF') or
-                tradingsymbol.endswith('BEES') or
-                tradingsymbol.endswith('IETF') or
-                any(keyword in tradingsymbol for keyword in [
-                    'LIQUID', 'GOLD', 'SILVER', 'NIFTY', 'SENSEX', 
-                    'BANK', 'IT', 'PHARMA', 'AUTO', 'ENERGY', 'METAL',
-                    'INFRA', 'FMCG', 'CONSUMPTION', 'HEALTHCARE'
-                ])
-            )
-            
-            # Only NSE ETFs
-            if is_etf and exchange == 'NSE' and instrument_type == 'EQ':
-                etf_symbols.append(tradingsymbol)
-        
-        # Remove duplicates and sort
-        etf_symbols = sorted(list(set(etf_symbols)))
+        # Use cached function to process the instruments data
+        etf_symbols = _cached_etf_instruments(instruments)
         
         st.success(f"✅ Found {len(etf_symbols)} ETF instruments from Kite API")
         return etf_symbols
@@ -2199,7 +2208,7 @@ with st.sidebar:
         if st.button("🔍 Fetch All ETFs"):
             if KITE and KITE.kite:
                 # Clear cache and fetch fresh ETF list
-                fetch_etf_instruments.clear()
+                _cached_etf_instruments.clear()
                 symbols = fetch_etf_instruments(KITE.kite)
                 MONITOR_STATE["symbols"] = symbols
                 
