@@ -1,5 +1,8 @@
 # 🚀 Streamlit Cloud Deployment Guide
 
+## ✅ **CRITICAL ISSUE FIXED (Latest Update)**
+**UnhashableParamError** has been resolved! The app was crashing because Streamlit couldn't cache functions with KiteConnect objects. This is now fixed with separated caching logic.
+
 ## 🔧 **FIXING CONNECTION ISSUE**
 
 Your Streamlit Cloud app is not connecting because the environment variables are missing.
