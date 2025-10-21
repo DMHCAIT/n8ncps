@@ -904,10 +904,13 @@ def fetch_prev_close(symbol: str) -> Optional[float]:
             ohlc = data.get("ohlc") or {}
             prev_close = ohlc.get("close")
             
-            if prev_close:
+            # Ensure we return a valid number or None
+            if prev_close and isinstance(prev_close, (int, float)) and prev_close > 0:
                 print(f"✅ {symbol}: Previous close ₹{prev_close:.2f}")
-            
-            return prev_close
+                return prev_close
+            else:
+                print(f"❌ Invalid prev_close data for {symbol}: {prev_close}")
+                return None
         except Exception as e:
             print(f"❌ Error fetching prev close for {symbol}: {e}")
             return None
@@ -2337,8 +2340,12 @@ for i, sym in enumerate(symbols):
         qty_db, avg_buy, target, status, product, unreal = 0, None, None, "WATCHING", "CNC", None
 
     pct_vs_prev = None
-    if isinstance(prev_close, (int, float)) and isinstance(ltp, (int, float)) and prev_close != 0:
-        pct_vs_prev = (ltp - prev_close) / prev_close * 100.0
+    # Zero-safe division to prevent ZeroDivisionError
+    if isinstance(prev_close, (int, float)) and isinstance(ltp, (int, float)) and prev_close != 0 and prev_close is not None:
+        try:
+            pct_vs_prev = (ltp - prev_close) / prev_close * 100.0
+        except (ZeroDivisionError, TypeError):
+            pct_vs_prev = None
     rows.append({
         "symbol": sym,
         "prev_close": f"₹{prev_close:.2f}" if isinstance(prev_close, (int, float)) else "-",
