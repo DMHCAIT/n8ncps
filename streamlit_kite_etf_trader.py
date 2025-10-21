@@ -1213,7 +1213,7 @@ def check_and_execute_buy(symbol: str, qty: int, dry_run: bool):
 
     # Check buy condition
     if should_buy(symbol, ltp, prev_close):
-        gap_percent = ((ltp - prev_close) / prev_close) * 100
+        gap_percent = ((ltp - prev_close) / prev_close) * 100 if prev_close != 0 else 0
         print(f"🎯 BUY TRIGGER: {symbol}")
         print(f"   Previous Close: ₹{prev_close:.2f}")
         print(f"   Current LTP: ₹{ltp:.2f}")
@@ -1419,7 +1419,7 @@ def monitor_loop():
                         continue
                     
                     current_pnl = (ltp - avg_buy_price) * qty
-                    pnl_percent = ((ltp - avg_buy_price) / avg_buy_price) * 100
+                    pnl_percent = ((ltp - avg_buy_price) / avg_buy_price) * 100 if avg_buy_price != 0 else 0
                     
                     # Check if target reached
                     if ltp >= target_price and status not in ["TARGET_HIT"]:
@@ -2337,7 +2337,7 @@ for i, sym in enumerate(symbols):
         qty_db, avg_buy, target, status, product, unreal = 0, None, None, "WATCHING", "CNC", None
 
     pct_vs_prev = None
-    if isinstance(prev_close, (int, float)) and isinstance(ltp, (int, float)):
+    if isinstance(prev_close, (int, float)) and isinstance(ltp, (int, float)) and prev_close != 0:
         pct_vs_prev = (ltp - prev_close) / prev_close * 100.0
     rows.append({
         "symbol": sym,
@@ -2742,7 +2742,7 @@ if not positions_df.empty:
                     if quote:
                         ltp = quote.get('last_price', 0)
                         pnl = (ltp - pos['avg_buy_price']) * pos['qty']
-                        pnl_pct = ((ltp - pos['avg_buy_price']) / pos['avg_buy_price']) * 100
+                        pnl_pct = ((ltp - pos['avg_buy_price']) / pos['avg_buy_price']) * 100 if pos['avg_buy_price'] != 0 else 0
                         st.write(f"LTP: ₹{ltp:.2f}")
                         color = "green" if pnl >= 0 else "red"
                         st.markdown(f"<span style='color: {color}'>P&L: ₹{pnl:.2f} ({pnl_pct:+.1f}%)</span>", unsafe_allow_html=True)
@@ -2783,7 +2783,7 @@ for symbol in MONITOR_STATE["symbols"]:
     ltp = fetch_ltp(symbol)
     prev_close = fetch_prev_close(symbol)
     gap = None
-    if ltp is not None and prev_close is not None:
+    if ltp is not None and prev_close is not None and prev_close != 0:
         gap = ((ltp - prev_close) / prev_close) * 100
     else:
         gap = None
