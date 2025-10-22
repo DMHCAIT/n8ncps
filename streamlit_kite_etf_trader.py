@@ -2052,17 +2052,109 @@ with st.sidebar:
         reserve_capital = MONITOR_STATE["total_capital"] * (MONITOR_STATE["reserve_percentage"] / 100.0)
         per_trade_allocation = deployment_capital * (MONITOR_STATE["per_trade_percentage"] / 100.0)
         
-        st.metric("Total Capital", f"₹{MONITOR_STATE['total_capital']:,.2f}")
-        st.metric("Deployment Capital (70%)", f"₹{deployment_capital:,.2f}")
-        st.metric("Reserve Capital (30%)", f"₹{reserve_capital:,.2f}")
-        st.metric("Per Trade Allocation (5%)", f"₹{per_trade_allocation:,.2f}")
+        # Create columns for better layout
+        col1, col2, col3 = st.columns(3)
         
-        # Show allocated capital
-        allocated = calculate_allocated_capital()
-        available_deployment = deployment_capital - allocated
-        st.metric("Available for Trading", f"₹{available_deployment:,.2f}")
+        with col1:
+            st.metric("💰 Total Capital", f"₹{MONITOR_STATE['total_capital']:,.2f}")
+            st.metric("🚀 Available for Trading", f"₹{deployment_capital - calculate_allocated_capital():,.2f}")
+        
+        with col2:
+            st.metric("📊 Deployment Capital (70%)", f"₹{deployment_capital:,.2f}")
+            st.metric("💵 Per Trade Allocation (5%)", f"₹{per_trade_allocation:,.2f}")
+        
+        with col3:
+            st.metric("🏦 Reserve Capital (30%)", f"₹{reserve_capital:,.2f}")
+            allocated = calculate_allocated_capital()
+            st.metric("💼 Currently Allocated", f"₹{allocated:,.2f}")
+        
+        # Show detailed breakdown
+        st.markdown("### 📋 Allocation Breakdown")
+        
+        breakdown_col1, breakdown_col2 = st.columns(2)
+        
+        with breakdown_col1:
+            st.markdown("""
+            **💰 Capital Distribution:**
+            - **Total Balance:** ₹{:,.2f}
+            - **For Trading (70%):** ₹{:,.2f}
+            - **Reserve (30%):** ₹{:,.2f}
+            - **Per Trade (5% of deployment):** ₹{:,.2f}
+            """.format(
+                MONITOR_STATE['total_capital'],
+                deployment_capital,
+                reserve_capital,
+                per_trade_allocation
+            ))
+        
+        with breakdown_col2:
+            # Calculate how many trades possible
+            max_trades = int(deployment_capital / per_trade_allocation) if per_trade_allocation > 0 else 0
+            current_positions = len([pos for pos in MONITOR_STATE.get('bought_today', []) if pos])
+            remaining_trades = max_trades - current_positions
+            
+            st.markdown("""
+            **🎯 Trading Capacity:**
+            - **Max Simultaneous Trades:** {}
+            - **Current Active Positions:** {}
+            - **Remaining Trade Slots:** {}
+            - **Capital per ETF:** ₹{:,.2f}
+            """.format(
+                max_trades,
+                current_positions,
+                remaining_trades,
+                per_trade_allocation
+            ))
+        
+        # Show sample ETF allocations
+        st.markdown("### 💹 Live ETF Allocation Examples")
+        
+        if MONITOR_STATE["symbols"]:
+            sample_data = []
+            sample_symbols = MONITOR_STATE["symbols"][:10]  # Show first 10 ETFs
+            
+            for sym in sample_symbols:
+                ltp = fetch_ltp(sym)
+                if ltp and ltp > 0:
+                    # Calculate exact quantity and allocation for this ETF
+                    quantity = int(per_trade_allocation / ltp)
+                    actual_allocation = quantity * ltp
+                    allocation_percentage = (actual_allocation / per_trade_allocation) * 100 if per_trade_allocation > 0 else 0
+                    
+                    sample_data.append({
+                        "ETF": sym,
+                        "Current Price": f"₹{ltp:.2f}",
+                        "Quantity": f"{quantity:,} shares",
+                        "Allocation": f"₹{actual_allocation:,.2f}",
+                        "Utilization": f"{allocation_percentage:.1f}%"
+                    })
+            
+            if sample_data:
+                # Display as a nice table
+                import pandas as pd
+                df = pd.DataFrame(sample_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                st.info(f"💡 **Allocation Logic:** Each ETF gets ₹{per_trade_allocation:,.2f} worth of shares (quantity = allocation ÷ current price)")
+            else:
+                st.warning("⚠️ No ETF price data available for allocation calculation")
+        
     else:
         st.warning("⚠️ Real balance not loaded. Click 'Refresh Real Balance'")
+        
+        # Show what the allocations would look like with sample balance
+        st.markdown("### 💡 Example Allocation (Sample ₹1,00,000 Balance)")
+        sample_balance = 100000
+        sample_deployment = sample_balance * 0.70  # 70%
+        sample_per_trade = sample_deployment * 0.05  # 5%
+        
+        st.markdown(f"""
+        **With ₹1,00,000 total balance:**
+        - **Deployment Capital:** ₹{sample_deployment:,.2f} (70%)
+        - **Per Trade Allocation:** ₹{sample_per_trade:,.2f} (5% of deployment)
+        - **Max Positions:** {int(sample_deployment / sample_per_trade)} simultaneous trades
+        - **Reserve Capital:** ₹{sample_balance * 0.30:,.2f} (30% safety buffer)
+        """)
         
         # Debug section for troubleshooting
         with st.expander("🔧 Debug Balance Issues"):
@@ -2346,11 +2438,25 @@ for i, sym in enumerate(symbols):
             pct_vs_prev = (ltp - prev_close) / prev_close * 100.0
         except (ZeroDivisionError, TypeError):
             pct_vs_prev = None
+    
+    # Calculate allocation information for this ETF
+    allocation_qty = "-"
+    allocation_amount = "-"
+    if isinstance(ltp, (int, float)) and ltp > 0 and MONITOR_STATE["total_capital"] > 0:
+        deployment_capital = MONITOR_STATE["total_capital"] * (MONITOR_STATE["deployment_percentage"] / 100.0)
+        per_trade_allocation = deployment_capital * (MONITOR_STATE["per_trade_percentage"] / 100.0)
+        calculated_qty = int(per_trade_allocation / ltp)
+        actual_allocation = calculated_qty * ltp
+        allocation_qty = f"{calculated_qty:,}"
+        allocation_amount = f"₹{actual_allocation:,.0f}"
+    
     rows.append({
         "symbol": sym,
         "prev_close": f"₹{prev_close:.2f}" if isinstance(prev_close, (int, float)) else "-",
         "ltp": f"₹{ltp:.2f}" if isinstance(ltp, (int, float)) else "-",
         "% vs prev_close": f"{pct_vs_prev:.2f}%" if pct_vs_prev is not None else "-",
+        "allocation_qty": allocation_qty,
+        "allocation_amount": allocation_amount,
         "position_qty": qty_db,
         "avg_buy": f"₹{avg_buy:.2f}" if avg_buy is not None else "-",
         "target_price": f"₹{target:.2f}" if target is not None else "-",
@@ -2384,7 +2490,47 @@ with tab1:
         st.warning("⏳ Loading market data... Click 'Refresh Data' if data doesn't appear")
 
     df = pd.DataFrame(rows)
-    st.dataframe(df, width='stretch')
+    
+    # Reorder columns to prioritize allocation information
+    column_order = [
+        'symbol', 'ltp', '% vs prev_close', 'allocation_qty', 'allocation_amount',
+        'position_qty', 'avg_buy', 'unrealized_pnl', 'target_price', 'status', 'product', 'prev_close'
+    ]
+    
+    # Only include columns that exist in the dataframe
+    available_columns = [col for col in column_order if col in df.columns]
+    df_reordered = df[available_columns]
+    
+    # Configure column display with better names
+    column_config = {
+        'symbol': st.column_config.TextColumn('ETF Symbol', width='small'),
+        'ltp': st.column_config.TextColumn('Current Price', width='small'),
+        '% vs prev_close': st.column_config.TextColumn('Gap %', width='small'),
+        'allocation_qty': st.column_config.TextColumn('📊 Buy Qty', width='small', help='Quantity to buy based on allocation'),
+        'allocation_amount': st.column_config.TextColumn('💰 Buy Amount', width='medium', help='Total amount that will be invested'),
+        'position_qty': st.column_config.NumberColumn('Holdings', width='small'),
+        'avg_buy': st.column_config.TextColumn('Buy Price', width='small'),
+        'unrealized_pnl': st.column_config.TextColumn('P&L', width='small'),
+        'target_price': st.column_config.TextColumn('Target', width='small'),
+        'status': st.column_config.TextColumn('Status', width='medium'),
+        'product': st.column_config.TextColumn('Type', width='small'),
+        'prev_close': st.column_config.TextColumn('Prev Close', width='small')
+    }
+    
+    # Display allocation summary above the table
+    if MONITOR_STATE["total_capital"] > 0:
+        deployment_capital = MONITOR_STATE["total_capital"] * (MONITOR_STATE["deployment_percentage"] / 100.0)
+        per_trade_allocation = deployment_capital * (MONITOR_STATE["per_trade_percentage"] / 100.0)
+        
+        st.info(f"💡 **Allocation Info:** Each ETF will get ₹{per_trade_allocation:,.0f} investment (Qty = Amount ÷ Current Price)")
+    
+    st.dataframe(
+        df_reordered, 
+        use_container_width=True, 
+        hide_index=True,
+        column_config=column_config,
+        height=600
+    )
 
 with tab2:
     st.subheader("🎯 GTT (Good Till Triggered) Orders")
