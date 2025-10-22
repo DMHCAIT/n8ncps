@@ -537,12 +537,24 @@ class KiteWrapper:
             
         return order_response
 
-    def place_limit_sell(self, symbol: str, qty: int, price: float) -> Dict[str, Any]:
-        """Place limit sell order"""
+    def place_limit_sell(self, symbol: str, qty: int, price: float, product: str = None) -> Dict[str, Any]:
+        """Place limit sell order using the same product type as the original buy"""
         if self.kite is None:
             raise RuntimeError("Kite client not initialized")
-            
-        print(f"📤 Placing SELL order: {qty} x {symbol} @ ₹{price:.2f}")
+        
+        # If product not specified, get it from the position data
+        if product is None:
+            with DB_LOCK:
+                cur = DB.cursor()
+                cur.execute("SELECT product FROM positions WHERE symbol = ? AND status IN ('BOUGHT', 'TARGET_HIT')", (symbol,))
+                row = cur.fetchone()
+                if row:
+                    product = row[0]
+                else:
+                    product = "CNC"  # Default fallback
+                    print(f"⚠️ No position found for {symbol}, defaulting to CNC")
+        
+        print(f"📤 Placing SELL order: {qty} x {symbol} @ ₹{price:.2f} ({product})")
         
         return self.kite.place_order(
             tradingsymbol=symbol, 
@@ -552,16 +564,28 @@ class KiteWrapper:
             order_type="LIMIT", 
             price=price, 
             variety="regular", 
-            product="CNC", 
+            product=product, 
             validity="DAY"
         )
     
-    def place_market_sell(self, symbol: str, qty: int) -> Dict[str, Any]:
-        """Place market sell order for emergency exits"""
+    def place_market_sell(self, symbol: str, qty: int, product: str = None) -> Dict[str, Any]:
+        """Place market sell order using the same product type as the original buy"""
         if self.kite is None:
             raise RuntimeError("Kite client not initialized")
-            
-        print(f"🚨 Placing MARKET SELL: {qty} x {symbol}")
+        
+        # If product not specified, get it from the position data
+        if product is None:
+            with DB_LOCK:
+                cur = DB.cursor()
+                cur.execute("SELECT product FROM positions WHERE symbol = ? AND status IN ('BOUGHT', 'TARGET_HIT')", (symbol,))
+                row = cur.fetchone()
+                if row:
+                    product = row[0]
+                else:
+                    product = "CNC"  # Default fallback
+                    print(f"⚠️ No position found for {symbol}, defaulting to CNC")
+        
+        print(f"🚨 Placing MARKET SELL: {qty} x {symbol} ({product})")
         
         return self.kite.place_order(
             tradingsymbol=symbol, 
@@ -570,7 +594,7 @@ class KiteWrapper:
             quantity=qty, 
             order_type="MARKET", 
             variety="regular", 
-            product="CNC"
+            product=product
         )
 
     # ---- GTT (Good Till Triggered) Methods ----
@@ -604,11 +628,22 @@ class KiteWrapper:
         elif price is None:
             price = trigger_price  # Default to trigger price for LIMIT orders
         
-        # Auto-select product type for BUY orders (MTF > CNC)
-        if product is None and transaction_type == "BUY":
-            product = "MTF"  # Try MTF first for buy orders
-        elif product is None:
-            product = "CNC"  # Default for sell orders
+        # Auto-select product type based on transaction type
+        if product is None:
+            if transaction_type == "BUY":
+                product = "MTF"  # Try MTF first for buy orders
+            else:  # SELL orders
+                # For sell orders, use the same product type as the original buy
+                with DB_LOCK:
+                    cur = DB.cursor()
+                    cur.execute("SELECT product FROM positions WHERE symbol = ? AND status IN ('BOUGHT', 'TARGET_HIT')", (symbol,))
+                    row = cur.fetchone()
+                    if row:
+                        product = row[0]
+                        print(f"🔄 Using {product} for SELL GTT (matching original buy product)")
+                    else:
+                        product = "CNC"  # Default fallback
+                        print(f"⚠️ No position found for {symbol}, defaulting to CNC for SELL GTT")
             
         try:
             gtt_params = {
@@ -1244,11 +1279,13 @@ def check_and_execute_buy(symbol: str, qty: int, dry_run: bool):
             save_trade(symbol, qty, "BUY", executed_price, order_id, True, {
                 "note": "dry_run simulated buy",
                 "gap_percent": gap_percent,
-                "prev_close": prev_close
+                "prev_close": prev_close,
+                "product_used": "MTF"  # Simulate MTF for dry run
             })
             target = executed_price * (1 + SELL_TARGET_PERCENT / 100.0)
-            upsert_position(symbol, qty, executed_price, datetime.now(timezone.utc).isoformat(), target, "BOUGHT")
-            notify(f"[DRY_RUN] 📊 Bought {qty} {symbol} at ₹{executed_price:.2f} (Gap: {gap_percent:.2f}%); Target: ₹{target:.2f}")
+            # Save position with MTF product type for dry run (simulating preferred MTF)
+            upsert_position(symbol, qty, executed_price, datetime.now(timezone.utc).isoformat(), target, "BOUGHT", "MTF")
+            notify(f"[DRY_RUN] 📊 Bought {qty} {symbol} at ₹{executed_price:.2f} (Gap: {gap_percent:.2f}%) [MTF]; Target: ₹{target:.2f}")
         else:
             # LIVE TRADING - Enhanced execution with MTF/CNC support
             try:
@@ -2729,6 +2766,7 @@ else:
                         with st.spinner("Placing buy order..."):
                             resp = KITE.place_market_buy(symbol_manual, int(qty_manual))
                             order_id = resp.get("order_id") if isinstance(resp, dict) else str(resp)
+                            product_used = resp.get("product_used", "CNC")  # Get the product type used
                             
                             # Wait and verify execution
                             time.sleep(2)
@@ -2741,15 +2779,16 @@ else:
                                 
                                 save_trade(symbol_manual, filled_qty, "BUY", avg_price, order_id, False, {
                                     "kite_resp": resp,
-                                    "execution_details": execution
+                                    "execution_details": execution,
+                                    "product_used": product_used
                                 })
                                 
-                                st.success(f"✅ BUY EXECUTED: {filled_qty} x {symbol_manual} @ ₹{avg_price:.2f}")
+                                st.success(f"✅ BUY EXECUTED: {filled_qty} x {symbol_manual} @ ₹{avg_price:.2f} ({product_used})")
                                 st.info(f"Total Cost: ₹{total_cost:,.2f} | Order ID: {order_id}")
                                 
-                                # Auto-create position entry
+                                # Auto-create position entry with correct product type
                                 target = avg_price * (1 + SELL_TARGET_PERCENT / 100.0)
-                                upsert_position(symbol_manual, filled_qty, avg_price, datetime.now(timezone.utc).isoformat(), target, "BOUGHT")
+                                upsert_position(symbol_manual, filled_qty, avg_price, datetime.now(timezone.utc).isoformat(), target, "BOUGHT", product_used)
                                 
                                 # Mark as bought today to prevent multiple orders
                                 MONITOR_STATE["bought_today"].add(symbol_manual)
